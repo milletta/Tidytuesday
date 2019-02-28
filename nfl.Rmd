@@ -1,6 +1,7 @@
 ---
 title: "NFL Stats"
 ---
+How consistent are the top 10 quarterbacks in the NFL?
 
 ```{r}
 library(gridExtra)
@@ -13,6 +14,7 @@ all_stats <- read_csv("https://raw.githubusercontent.com/rfordatascience/tidytue
 str(all_stats)
 ```
 
+First, lets look at Russell Wilson to figure out the organization I want
 ```{r}
 russ_stats <- all_stats %>% 
   filter(name=="Russell Wilson")
@@ -27,7 +29,6 @@ ave_pass_yards
 
 ```{r}
 # chart of yearly pass yards and rush yards
-library(ggplot2)
 p1 <- russ_stats %>% 
   group_by(game_year) %>% 
   mutate(yearly_pass = mean(pass_yds), yearly_rush = mean(rush_yds)) %>% 
@@ -43,7 +44,7 @@ p2 <- russ_stats %>%
 grid.arrange(p1, p2, nrow=1)
 ```
 
-
+Find the top QBs (based on highest pass yards per game)
 ```{r}
 # top qbs
 top_qbs <- all_stats %>% 
@@ -53,6 +54,7 @@ top_qbs <- all_stats %>%
   top_n(10, Ave_Pass_Yards)
 ```
 
+Now organize their stats like I did for Russ
 ```{r}
 # same as above for russ, but for all QBs
 all_stats %>% 
@@ -61,10 +63,5 @@ all_stats %>%
   select(game_year, name, pass_yds, rush_yds) %>% 
   group_by(name, game_year) %>% 
   mutate(ave_pass = mean(pass_yds)) %>% 
-  ggplot(aes(x = game_year, y = ave_pass)) + geom_line() + facet_wrap(~name) + labs(title="Top 10 QB - Yearly Passing Yard (yearly average)") + xlab("Season") + ylab("Average Weekly Passing Yards")
+  ggplot(aes(x = game_year, y = ave_pass)) + geom_line() + facet_wrap(~name) + labs(title="Top 10 QB - Average Pass Yards Per Game (by year)") + xlab("Season") + ylab("Average Weekly Passing Yards")
 ```
-
-```{r}
-
-```
-
