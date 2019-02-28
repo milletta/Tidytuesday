@@ -1,0 +1,70 @@
+---
+title: "NFL Stats"
+---
+
+```{r}
+library(gridExtra)
+library(tidyverse)
+```
+
+
+```{r}
+all_stats <- read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2018/2018-08-28/nfl_2010-2017.csv")
+str(all_stats)
+```
+
+```{r}
+russ_stats <- all_stats %>% 
+  filter(name=="Russell Wilson")
+head(russ_stats)
+```
+
+```{r}
+ave_pass_yards <- russ_stats %>% 
+  summarise(Ave_Yards = mean(pass_yds))
+ave_pass_yards
+```
+
+```{r}
+# chart of yearly pass yards and rush yards
+library(ggplot2)
+p1 <- russ_stats %>% 
+  group_by(game_year) %>% 
+  mutate(yearly_pass = mean(pass_yds), yearly_rush = mean(rush_yds)) %>% 
+  group_by(game_year) %>% 
+  ggplot(aes(x = game_year, y = yearly_pass)) + geom_line()
+
+p2 <- russ_stats %>% 
+  group_by(game_year) %>% 
+  mutate(yearly_rush = mean(rush_yds)) %>% 
+  group_by(game_year) %>% 
+  ggplot(aes(x = game_year, y = yearly_rush)) + geom_line()
+
+grid.arrange(p1, p2, nrow=1)
+```
+
+
+```{r}
+# top qbs
+top_qbs <- all_stats %>% 
+  filter(position == "QB") %>% 
+  group_by(name) %>% 
+  summarise(Ave_Pass_Yards = mean(pass_yds), Ave_Rush_Yards = mean(rush_yds, na.rm=TRUE)) %>% 
+  top_n(10, Ave_Pass_Yards)
+```
+
+```{r}
+# same as above for russ, but for all QBs
+all_stats %>% 
+  filter(position=="QB") %>%
+  inner_join(top_qbs) %>% 
+  select(game_year, name, pass_yds, rush_yds) %>% 
+  group_by(name, game_year) %>% 
+  mutate(ave_pass = mean(pass_yds)) %>% 
+  ggplot(aes(x = game_year, y = ave_pass)) + geom_line() + facet_wrap(~name) + labs(title="Top 10 QB - Yearly Passing Yard (yearly average)") + xlab("Season") + ylab("Average Weekly Passing Yards")
+```
+
+```{r}
+
+```
+
