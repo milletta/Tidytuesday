@@ -1,0 +1,157 @@
+---
+title: "Medical Care"
+format: html
+editor: visual
+---
+
+## Dataset
+
+This dataset comes from the TidyTuesday github repository for April 8, 2025. The data contains state-level results for medicare.gov "timely and effective care" measurements. As of 2025-04-06, the data is available at the [Centers for Medicare and Medicaid Services (CMS) website](https://data.cms.gov/provider-data/dataset/apyc-v239).
+
+The motivation for this data is as follows:
+
+> Emergency room wait times vary significantly across the United States depending on factors such as hospital resources, patient volume, and staffing levels, with some states facing delays that can stretch for more than three hours.
+
+Beginning questions can be asked such as:
+
+-   Is there a connection between state populations and wait times?
+
+-   Which conditions have the longest wait times? The shortest?
+
+Start with loading data and exploration:
+
+```{r}
+options(scipen = 999)
+library(tidyverse)
+# load data using tidytuesday package
+tuesdata <- tidytuesdayR::tt_load('2025-04-08')
+care_state_raw <- tuesdata$care_state
+
+# exploration - table structure
+head(care_state_raw)
+# what are each of the distinct measure names?
+unique(care_state_raw$measure_name)
+# what were people in for?
+unique(care_state_raw$condition)
+
+# filter. We are interested in emergency room wait times, not sepsis or cataracts, etc.
+care_state <- care_state_raw %>%
+  filter(condition == 'Emergency Department')
+
+# having looked at the data, there also seems to be some inconsistencies with the "low", "med", and "high" values, they aren't always in order.
+# as such, we will also only keep 18b (median), 18c (median mental health), 22 and 23 as additional parameters
+# at this time, also filter out states with missing data, as well as DC, and PR (Puerto Rico)
+care_state <- care_state %>% 
+  filter(measure_id %in% c('OP_18b', 'OP_18c', 'OP_22', 'OP_23')) %>% 
+  filter(!is.na(score)) %>% 
+  filter(!(state %in% c('DC', 'PR')))
+
+# check table
+head(care_state)
+
+# pivot table so that it's one row per state
+care_state_pivot <- care_state %>% 
+  select(state, measure_id, score) %>% 
+  tidyr::pivot_wider(names_from = measure_id, values_from = score) %>% 
+  # rename columns to be more intuitive
+  rename(med_visit_min = OP_18b, med_visit_mental_min = OP_18c, left_wo_seen = OP_22, stroke_scan = OP_23)
+
+# rough demographics to pull for data:
+# state population (2024 Census Bureau estimate)
+# state size (square miles)
+# hospitals in the state - I would like emergency rooms specifically, but cannot find this easily accessible
+# staffed beds - indicates average size of hospitals
+
+# population and size was gathered with the help of ChatGPT
+# hospital information is from https://www.ahd.com/state_statistics.html
+
+# library(googlesheets4)
+googlesheets4::gs4_deauth() ##authentication. File is viewable to anyone with this link
+demographics <- googlesheets4::read_sheet('https://docs.google.com/spreadsheets/d/1Y5GPG9lgw4YUe5xaJiypNa3roFfO-rK7IKhQn8jWq4c/edit?gid=0#gid=0')
+
+state_info <- care_state_pivot %>% left_join(demographics, by = c('state' = 'Abbreviation'))
+```
+
+With this data, we can start to answer the first two introductory questions we had:
+
+State Population vs Wait Times
+
+```{r}
+# correlation between two variables: med_visit_min and Population
+cor(state_info$med_visit_min, state_info$Population) # 0.253, weak positive correlation
+# look at mental/psychiatric
+cor(state_info$med_visit_mental_min, state_info$Population) # 0.191, weaker
+
+# put population into millions of people so that the results will be easier to understand
+state_info$Population_Millions <- state_info$Population / 1000000
+
+# simple scatter plots for these two
+state_info %>%
+  ggplot(aes(x = Population_Millions, y = med_visit_min)) +
+  geom_point() + 
+  theme_minimal() +
+  ggtitle("Median Time Spent in Emergency Room by Population (Millions)")
+
+# simple scatter plots for these two
+state_info %>%
+  ggplot(aes(x = Population_Millions, y = med_visit_mental_min)) +
+  geom_point() + 
+  theme_minimal() +
+  ggtitle("Median Time Spent in Emergency Room by Population (Millions) - Mental/Psychiatric Visit")
+
+# as the non-mental visits seem to have a higher correlation, lets look at a regression for regular emergency room visits
+emergency_lm <- lm(med_visit_min ~ Population_Millions, data = state_info)
+summary(emergency_lm)
+# plot best fit line
+ggplot(state_info, aes(x = Population_Millions, y = med_visit_min)) +
+  geom_point() + 
+  theme_minimal() +
+  stat_summary(fun.data= mean_cl_normal) + 
+  geom_smooth(method='lm')
+# summary plots for linear model
+plot(emergency_lm)
+```
+
+Looking at a simple linear regression for average emergency room visit times in minutes by Population, we found a coefficient of 1.04, with a p-value of 0.076. If we use the standard rule of thumb of a 95% confidence interval, then we would conclude that population is not a significant factor on population wait times. However, a linear model may not be the best model to use as looking at the QQ plot seems to indicate the residuals may not be normally distributed. Possible ways to investigate this could be transforming either the population (log transform) or the visit time (requires box-cox analysis). For now, we will leave with the assumption that the wait time does not increase with population.
+
+However, population does not tell the entire story, as some states have better infrastructure in place than others. It might be better to look at some more engineered variables, such as wait time by hospitals per 100k people, or by staffed beds per 100 people. Lets dig into these options a bit better, and explore what states might perform better.
+
+```{r}
+state_info %>% 
+  mutate(hospitals_per_100k = Num_Hospitals / (Population/100000)) %>% 
+  arrange(hospitals_per_100k)
+```
+
+We can see that the number of hospitals per 100k people varies considerably. The lowest is Washington, with 0.75 hospitals per 100k, while 2.56 South Dakota. As an anecdote, Washington has a median emergency room visit time of 154 minutes, while South Dakota is at 113. Let's see if this assumption holds true generally.
+
+```{r}
+state_info <- state_info %>% 
+  mutate(hospitals_per_100k = Num_Hospitals / (Population/100000))
+# correlation
+cor(state_info$med_visit_min, state_info$hospitals_per_100k) # -0.513
+
+# scatterplot
+state_info %>% ggplot(aes(x = hospitals_per_100k, y = med_visit_min)) + 
+  geom_point() + 
+  theme_minimal() + 
+  ggtitle("Median Emergency Room Visit Time (min) by Hospitals per 100k people")
+```
+
+The relationship by this scatterplot seems much more consistent than looking only at population. Now for a regression:
+
+```{r}
+lm_hospitals_per_pop <- lm(med_visit_min ~ hospitals_per_100k, data = state_info)
+summary(lm_hospitals_per_pop)
+
+# plot best fit line
+ggplot(state_info, aes(x = hospitals_per_100k, y = med_visit_min)) +
+  geom_point() + 
+  theme_minimal() +
+  stat_summary(fun.data= mean_cl_normal) + 
+  geom_smooth(method='lm') +
+  ggtitle("State Emergency Room Visit Duration by Hospitals per 100k Population")
+
+plot(lm_hospitals_per_pop)
+```
+
+When we look at this more tailored variable, we found a coefficient of -34.78, with a p-value of 0.0001. This indicates there is a significant relationship between the hospitals per 100k people and the average time of visit in the emergency room.
