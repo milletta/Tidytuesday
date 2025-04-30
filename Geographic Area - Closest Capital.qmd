@@ -1,0 +1,176 @@
+---
+title: "Geographic Centroid Area"
+format: html
+editor: visual
+---
+
+Proof of concept: Map of the US highlighted by nearest state capital:
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(geosphere)  # for distance calculation
+library(maps)       # for US map data
+
+# Example: coordinates for some US state capitals
+capitals <- tibble::tibble(
+  state = c("Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut",
+            "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa",
+            "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan",
+            "Minnesota", "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire",
+            "New Jersey", "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio",
+            "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota",
+            "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", "West Virginia",
+            "Wisconsin", "Wyoming"),
+  capital = c("Montgomery", "Juneau", "Phoenix", "Little Rock", "Sacramento", "Denver", "Hartford",
+              "Dover", "Tallahassee", "Atlanta", "Honolulu", "Boise", "Springfield", "Indianapolis",
+              "Des Moines", "Topeka", "Frankfort", "Baton Rouge", "Augusta", "Annapolis", "Boston",
+              "Lansing", "St. Paul", "Jackson", "Jefferson City", "Helena", "Lincoln", "Carson City",
+              "Concord", "Trenton", "Santa Fe", "Albany", "Raleigh", "Bismarck", "Columbus",
+              "Oklahoma City", "Salem", "Harrisburg", "Providence", "Columbia", "Pierre", "Nashville",
+              "Austin", "Salt Lake City", "Montpelier", "Richmond", "Olympia", "Charleston", "Madison",
+              "Cheyenne"),
+  lon = c(-86.3000, -134.4200, -112.0738, -92.3311, -121.4944, -104.9847, -72.6851,
+          -75.5244, -84.2807, -84.3880, -157.8583, -116.2023, -89.6500, -86.1581, -93.6091,
+          -95.6890, -84.8733, -91.1871, -69.7665, -76.4911, -71.0589, -84.5467, -93.0940,
+          -90.1848, -92.1735, -112.0270, -96.6753, -119.7661, -71.5376, -74.7670, -105.9378,
+          -73.7562, -78.6382, -100.7837, -82.9988, -97.5341, -123.0351, -76.8844, -71.4128,
+          -81.0350, -100.3509, -86.7844, -97.7431, -111.8910, -72.5760, -77.4360, -122.9007,
+          -81.6326, -89.3838, -104.8202),
+  lat = c(32.3615, 58.3019, 33.4484, 34.7465, 38.5816, 39.7392, 41.7637,
+          39.1582, 30.4383, 33.7490, 21.3069, 43.6150, 39.7983, 39.7684, 41.6005,
+          39.0558, 38.1973, 30.4570, 44.3072, 38.9784, 42.3601, 42.7325, 44.9537,
+          32.2988, 38.5767, 46.5927, 40.8136, 39.1638, 43.2073, 40.2206, 35.6869,
+          42.6526, 35.7796, 46.8083, 39.9612, 35.4676, 44.9429, 40.2732, 41.8240,
+          34.0007, 44.3670, 36.1627, 30.2672, 40.7608, 44.2601, 37.5407, 47.0379,
+          38.3498, 43.0747, 41.1399)
+)
+
+# Create a grid over the US. Get the lat and long range for continental US
+us_map <- map_data("state")
+lon_range <- range(us_map$long)
+lat_range <- range(us_map$lat)
+
+# grid expand will do a cross join essentially, and fill in all possible iterations of the two vectors using. In this case, lat and lon by 0.5 degrees. 
+# If you want more precision, decrease "by"
+grid <- expand.grid(
+  lon = seq(lon_range[1], lon_range[2], by = 0.5),
+  lat = seq(lat_range[1], lat_range[2], by = 0.5)
+)
+
+# Assign each grid point to the nearest capital
+# uses geosphere distHaversine - "half-versed-sine" to find the smallest distance between two points "as the crow flied" assuming spherical globe ignoring ellipsoidal effects
+grid$nearest_capital <- apply(grid, 1, function(pt) {
+  dists <- geosphere::distHaversine(
+    matrix(c(capitals$lon, capitals$lat), ncol = 2),
+    c(pt['lon'], pt['lat'])
+  )
+  capitals$capital[which.min(dists)]
+})
+
+# Plot the US map with colored regions by nearest capital
+ggplot() +
+  geom_tile(data = grid, aes(x = lon, y = lat, fill = nearest_capital), alpha = 0.7) +
+  geom_polygon(data = us_map, aes(x = long, y = lat, group = group), fill = NA, color = "black") +
+  coord_fixed(1.3) +
+  # scale_fill_brewer(palette = "Set3") +
+  theme_minimal() +
+  theme(legend.position="none") +
+  labs(title = "US Regions by Nearest State Capital")
+#ggsave('nearest_capital_test.png', width = 15, height = 15)
+```
+
+The example above is simpler, and gets the point across, but it highlights the area around the actual states, and if you want higher precision (more than 0.5 degrees) it's a little slow.
+
+Calculate square mileage of each area, and replot with areas included. This time using rnaturalearth package.
+
+```{r}
+# Load libraries
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(units)
+library(rnaturalearth)
+# library(rnaturalearthdata)
+
+# Use your capitals tibble (make sure it's named `capitals`)
+# sf is a dataframe specifically for spatial data
+# looking at the original "capitals" and "capitals" sf shows that there's a new column that combined lat and lon into a "point" object
+capitals_sf <- st_as_sf(capitals, coords = c("lon", "lat"), crs = 4326)
+
+# Get contiguous US boundary
+us_boundary <- ne_states(country = "United States of America", returnclass = "sf") %>%
+  filter(!name %in% c("Hawaii", "Alaska", "Puerto Rico")) %>%
+  st_union() %>% # Causes a dataframe to be returned as a list
+  st_transform(5070)  # Albers Equal Area CRS for accurate area calc. Converts Lat Lon to Easting and Northing(?)
+
+# Project capital points to same CRS (convert lat/lon)
+capitals_proj <- st_transform(capitals_sf, crs = 5070)
+
+# Combine all 50 points into one MULTIPOINT geometry
+points_union <- st_combine(capitals_proj)
+
+# Generate Voronoi polygons from that multipoint
+# voronoi polygons is the process of dividing a space into polygons by proximity to points
+# this is the same as the grid$nearest_capital definition
+voronoi_raw <- st_voronoi(points_union)
+
+# changes points from "geometry collection" to "polygon" and unnests it
+voronoi_polys <- st_collection_extract(voronoi_raw)
+
+# Convert to sf object
+voronoi_sf <- st_sf(geometry = st_sfc(voronoi_polys), crs = 5070)
+
+# Spatial join: find which capital is in which polygon
+# Each capital gets assigned to its Voronoi polygon
+capital_points <- capitals_proj %>%
+  select(capital)
+
+# Join each Voronoi polygon with the capital inside it
+# st_contains is basically like "is easting and northing within the polygon"
+voronoi_labeled <- st_join(voronoi_sf, capital_points, join = st_contains)
+
+# Now proceed with clipping and area calculation. 
+# at this point, capital regions that contain islands become multipolygons because they are the same "region" but also geographically disconnected (I believe)
+voronoi_clipped <- st_intersection(voronoi_labeled, us_boundary)
+
+# Calculate area
+voronoi_clipped <- voronoi_clipped %>%
+  mutate(area_km2 = set_units(st_area(.), "km^2"),
+         area_mi2 = set_units(area_km2, "mi^2"))
+
+# Get centroids for labels
+centroids <- st_centroid(voronoi_clipped)
+
+# Get US state boundaries (excluding AK, HI, PR) and project
+state_borders <- ne_states(country = "United States of America", returnclass = "sf") %>%
+  filter(!name %in% c("Hawaii", "Alaska", "Puerto Rico")) %>%
+  st_transform(5070)
+
+# get a dataframe for the capitals only in continental US and join area
+capitals_sf_cont <- capitals_sf %>% filter(!state %in% c('Alaska', 'Hawaii')) %>% 
+  st_join(voronoi_clipped, join = st_within)
+
+ggplot() +
+  # plot a geographic data opbject based off of the points given in geometry column
+  geom_sf(data = voronoi_clipped, aes(fill = as.numeric(area_mi2)), color = "white") +
+  # plot geographic data points for state borders
+  geom_sf(data = state_borders, fill = NA, color = "darkgray", size = 0.3) +
+  # plots capital names at the centroid of each area
+  geom_sf_text(data = centroids, aes(label = paste0(capital, "\n", round(as.numeric(area_mi2), 0), " mi²")), size = 3, color = "black") +
+  # to also include a point where the capital actually is, include this line
+  geom_sf(data = capitals_sf_cont, size = 0.5) + 
+  # for a cleaner look that just has some state capitals, use the following. Removes some overlaping names
+  # geom_sf_text(data = centroids, aes(label = paste0(capital)), size = 2, color = "black", check_overlap = T) +
+  scale_fill_gradient2(low = "steelblue", mid = "white", high = "lightcoral", midpoint = 80000, name = 'Area (mi^2)') +
+  # scale_fill_viridis_c(option = "plasma", name = "Area (mi²)") +
+  theme_minimal() +
+  labs(
+    title = "US Regions by Nearest State Capital",
+    subtitle = "Voronoi tessellation shaded by area in square miles",
+    caption = "Data: Natural Earth + Custom Capital Coordinates"
+  ) +
+  theme(legend.position = "bottom")
+# to save image, uncomment the following
+# ggsave('nearest_capital.png', width = 15, height = 15)
+```
